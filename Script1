@@ -1,0 +1,106 @@
+#!/usr/bin/env yade
+# CPM Uniaxial Elastic (Ch.3) - COMPLETE FIXED CODE
+
+from yade import *
+from yade import pack, plot, utils
+import numpy as np
+
+O.reset()
+print("=== CPM uniaxial test (elastic) ===")
+
+############################
+# 1. MATERIAL
+############################
+concrete = CpmMat(
+    young=30e9,
+    poisson=0.2,
+    density=2400,
+    sigmaT=3.0e6,
+    frictionAngle=radians(30),
+    epsCrackOnset=1e-4,
+    relDuctility=30,
+    neverDamage=True
+)
+concreteId = O.materials.append(concrete)
+
+############################
+# 2. PACKING
+############################
+Lx, Ly, Lz = 0.08, 0.08, 0.16
+r = 0.0035
+
+pred = pack.inAlignedBox((0, 0, 0), (Lx, Ly, Lz))
+sp = pack.randomDensePack(
+    pred,
+    spheresInCell=2000,
+    radius=r,
+    returnSpherePack=True,
+    memoizeDb='/tmp/cpm-uniax.sqlite'
+)
+
+O.bodies.clear()
+sp.toSimulation(material=concreteId)
+
+N = len(O.bodies)
+volumes = [(4.0/3.0)*3.14*O.bodies[i].shape.radius**3 for i in range(N)]
+rho = sum(volumes)/(Lx*Ly*Lz)
+print("N=%d, rho=%.3f" % (N, rho))
+
+############################
+# 3. BOUNDARIES
+############################
+features = utils.uniaxialTestFeatures()
+negIds, posIds = features['negIds'], features['posIds']
+axis, area = features['axis'], features['area']
+strainRate = 1e-3
+
+############################
+# 4. ENGINES
+############################
+O.engines = [
+    ForceResetter(),
+    BoundDispatcher([Bo1_Sphere_Aabb(aabbEnlargeFactor=1.5,label='bo1')]),
+    InsertionSortCollider(),
+    InteractionLoop(
+        [Ig2_Sphere_Sphere_ScGeom(interactionDetectionFactor=1.5,label='ig2')],
+        [Ip2_CpmMat_CpmMat_CpmPhys()],
+        [Law2_ScGeom_CpmPhys_Cpm()]
+    ),
+    NewtonIntegrator(damping=0.4),
+    UniaxialStrainer(
+        strainRate=strainRate,
+        axis=axis,
+        negIds=negIds,
+        posIds=posIds
+    ),
+    PyRunner(iterPeriod=200,command='plot.addData(eps=O.strain[axis],sig=abs(O.meanStress(axis))*1e-6,i=O.iter)')
+]
+
+############################
+# 5. BUILD RI=1.5 NETWORK
+############################
+O.step()
+O.engines[1][0].aabbEnlargeFactor = -1
+O.engines[3].geomDispatcher.functors[0].interactionDetectionFactor = -1
+
+############################
+# 6. RUN
+############################
+print("--- running elastic stage ---")
+O.run(5000, True)
+
+############################
+# 7. POSTPROCESS
+############################
+eps = np.array(plot.data['eps'])
+sig = np.array(plot.data['sig'])
+np.savetxt('cpm_elastic.dat', np.column_stack((eps, sig)), header='eps sig_MPa')
+
+if len(eps) > 10:
+    E = (sig[-1] - sig[-10])/(eps[-1] - eps[-10]) / 1e6
+    print("E ≈ %.1f GPa" % E)
+
+plot.plots = {'eps':('sig','k-')}
+plot.plot()
+
+print("Done. File: cpm_elastic.dat")
