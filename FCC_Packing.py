@@ -198,21 +198,36 @@ for b in O.bodies:
 print("F-type (axis) particles: %d" % len(axisIds))
 
 imageMap = {}  # {realId: [('x', imgId), ('y', imgId)]}
+planeEps = 1e-10  # threshold: particle is ON the cut plane (not just near it)
+nOnX = 0; nOnY = 0
 for b in list(O.bodies):
     if not isinstance(b.shape, Sphere): continue
     if b.id in axisIds: continue
     bx, by, bz = b.state.pos
     imgs = []
-    if abs(bx) <= r:
+    if bx < planeEps:
+        # Particle sits exactly on x=0 plane; image would overlap self → explosion.
+        # Enforce symmetry by blocking the x translational and rotational DOFs.
+        b.state.blockedDOFs = b.state.blockedDOFs + 'xX' if b.state.blockedDOFs else 'xX'
+        nOnX += 1
+    elif bx <= r:
         iid = O.bodies.append(sphere((-bx, by, bz), r, material='fccMat'))
         O.bodies[iid].state.blockedDOFs = 'xyzXYZ'
         imgs.append(('x', iid))
-    if abs(by) <= r:
+    if by < planeEps:
+        # Particle sits exactly on y=0 plane; block y DOFs instead of creating image.
+        existing = b.state.blockedDOFs
+        if 'y' not in existing:
+            b.state.blockedDOFs = existing + 'yY'
+        nOnY += 1
+    elif by <= r:
         iid = O.bodies.append(sphere((bx, -by, bz), r, material='fccMat'))
         O.bodies[iid].state.blockedDOFs = 'xyzXYZ'
         imgs.append(('y', iid))
     if imgs:
         imageMap[b.id] = imgs
+print("On x=0 plane (blocked, no image): %d" % nOnX)
+print("On y=0 plane (blocked, no image): %d" % nOnY)
 
 nImgs = sum(len(v) for v in imageMap.values())
 print("Periodic image particles: %d" % nImgs)
