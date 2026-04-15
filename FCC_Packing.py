@@ -230,11 +230,11 @@ def updateImages():
             if axis == 'x':
                 bi.state.pos    = (-rx,  ry,  rz)
                 bi.state.vel    = Vector3(-vx,  vy,  vz)
-                bi.state.angVel = Vector3( wx,  wy,  wz)
+                bi.state.angVel = Vector3( wx, -wy, -wz)  # pseudovector: flip wy,wz under x-reflection
             else:
                 bi.state.pos    = ( rx, -ry,  rz)
                 bi.state.vel    = Vector3( vx, -vy,  vz)
-                bi.state.angVel = Vector3( wx,  wy,  wz)
+                bi.state.angVel = Vector3(-wx,  wy, -wz)  # pseudovector: flip wx,wz under y-reflection
 
 def routeForces():
     """Transfer contact forces from image particles to real parents with
@@ -249,16 +249,17 @@ def routeForces():
         if not i.isReal or not hasattr(i, 'phys') or i.phys is None: continue
         nf = i.phys.normalForce
         sf = i.phys.shearForce
-        # Force on id2 from contact = -(nf+sf)
+        # YADE convention: normalForce = force ON id2.
+        # Image is id2: force on image = +(nf+sf); reflect x-component to route to real.
         if i.id2 in imgToReal:
             realId, axis = imgToReal[i.id2]
-            fx = -(nf[0]+sf[0]); fy = -(nf[1]+sf[1]); fz = -(nf[2]+sf[2])
+            fx = nf[0]+sf[0]; fy = nf[1]+sf[1]; fz = nf[2]+sf[2]
             if axis == 'x': O.forces.addF(realId, Vector3(-fx,  fy,  fz))
             else:           O.forces.addF(realId, Vector3( fx, -fy,  fz))
-        # Force on id1 from contact = +(nf+sf)
+        # Image is id1: force on image = -(nf+sf); reflect x-component to route to real.
         if i.id1 in imgToReal:
             realId, axis = imgToReal[i.id1]
-            fx = nf[0]+sf[0]; fy = nf[1]+sf[1]; fz = nf[2]+sf[2]
+            fx = -(nf[0]+sf[0]); fy = -(nf[1]+sf[1]); fz = -(nf[2]+sf[2])
             if axis == 'x': O.forces.addF(realId, Vector3(-fx,  fy,  fz))
             else:           O.forces.addF(realId, Vector3( fx, -fy,  fz))
 
@@ -289,7 +290,6 @@ vtkS = export.VTKExporter(vtkDir+"/spheres/spheres")
 vtkI = export.VTKExporter(vtkDir+"/interactions/interactions")
 vtkW = export.VTKExporter(vtkDir+"/walls/walls")
 vtkS.exportSpheres(what={'membrane':'1 if b.id in %r else 0' % set(membraneIds)})
-vtkW.exportSpheres()
 print("[VTK] Initial snapshot saved.")
 
 # =============================================================================
@@ -322,28 +322,31 @@ membraneCmd = (
     "    pdat.append((bid,px,py,rr))\n"
     "if len(proj) >= 4:\n"
     "    pts = np.array(proj)\n"
-    "    xs  = max(pts[:,0].max()-pts[:,0].min(), 1e-12)\n"
-    "    zs  = max(pts[:,1].max()-pts[:,1].min(), 1e-12)\n"
-    "    mir = []\n"
-    "    for p in proj:\n"
-    "        for dx in [-xs,0,xs]:\n"
-    "            for dz in [-zs,0,zs]:\n"
-    "                if dx!=0 or dz!=0:\n"
-    "                    mir.append([p[0]+dx, p[1]+dz])\n"
-    "    vor = Voronoi(np.vstack([pts, np.array(mir)]))\n"
-    "    def area(v,i):\n"
-    "        reg = v.regions[v.point_region[i]]\n"
-    "        if -1 in reg or len(reg)<3: return 0.0\n"
-    "        vx=v.vertices[reg]; n=len(vx); s=0.0\n"
-    "        for ii in range(n):\n"
-    "            jj=(ii+1)%n\n"
-    "            s+=vx[ii,0]*vx[jj,1]-vx[jj,0]*vx[ii,1]\n"
-    "        return abs(s)*0.5\n"
-    "    for idx,(bid,dx,dy,rr) in enumerate(pdat):\n"
-    "        a = area(vor,idx)\n"
-    "        if a>0 and rr>0:\n"
-    "            F = sig3*a\n"
-    "            O.forces.addF(bid, Vector3(-F*dx/rr,-F*dy/rr,0.0))\n"
+    "    if np.any(np.isnan(pts)) or np.any(np.isinf(pts)):\n"
+    "        import sys; print('MEMBRANE: NaN/Inf in positions, skipping step'); sys.stdout.flush()\n"
+    "    else:\n"
+    "        xs  = max(pts[:,0].max()-pts[:,0].min(), 1e-12)\n"
+    "        zs  = max(pts[:,1].max()-pts[:,1].min(), 1e-12)\n"
+    "        mir = []\n"
+    "        for p in proj:\n"
+    "            for dx in [-xs,0,xs]:\n"
+    "                for dz in [-zs,0,zs]:\n"
+    "                    if dx!=0 or dz!=0:\n"
+    "                        mir.append([p[0]+dx, p[1]+dz])\n"
+    "        vor = Voronoi(np.vstack([pts, np.array(mir)]))\n"
+    "        def area(v,i):\n"
+    "            reg = v.regions[v.point_region[i]]\n"
+    "            if -1 in reg or len(reg)<3: return 0.0\n"
+    "            vx=v.vertices[reg]; n=len(vx); s=0.0\n"
+    "            for ii in range(n):\n"
+    "                jj=(ii+1)%n\n"
+    "                s+=vx[ii,0]*vx[jj,1]-vx[jj,0]*vx[ii,1]\n"
+    "            return abs(s)*0.5\n"
+    "        for idx,(bid,dx,dy,rr) in enumerate(pdat):\n"
+    "            a = area(vor,idx)\n"
+    "            if a>0 and rr>0:\n"
+    "                F = sig3*a\n"
+    "                O.forces.addF(bid, Vector3(-F*dx/rr,-F*dy/rr,0.0))\n"
 )
 
 # =============================================================================
@@ -363,17 +366,19 @@ loggerCmd = (
     "botZ   = O.bodies[botId].state.pos[2] + rp\n"
     "L      = topZ - botZ\n"
     "eps    = max((L0-L)/L0, 0.0) if L0>0 else 0.0\n"
-    "fTop   = sum(abs(i.phys.normalForce[2]) for i in O.interactions\n"
+    "fTop   = sum((i.phys.normalForce[2] if i.id1==topId else -i.phys.normalForce[2])\n"
+    "             for i in O.interactions\n"
     "             if i.isReal and hasattr(i,'phys') and i.phys is not None\n"
     "             and (i.id1==topId or i.id2==topId))\n"
-    "fBot   = sum(abs(i.phys.normalForce[2]) for i in O.interactions\n"
+    "fBot   = sum((i.phys.normalForce[2] if i.id1==botId else -i.phys.normalForce[2])\n"
+    "             for i in O.interactions\n"
     "             if i.isReal and hasattr(i,'phys') and i.phys is not None\n"
     "             and (i.id1==botId or i.id2==botId))\n"
-    "sig1   = 0.5*(fTop+fBot)/A if A>0 else 0.0\n"
-    "ratio  = sig1/sig3 if sig3>0 else 0.0\n"
+    "sig1   = 0.5*(fTop-fBot)/A if A>0 else 0.0\n"
+    "ratio  = sig1/(-sig3) if sig3>0 else 0.0\n"
     "with open(O.tags['outCsv'],'a') as f:\n"
     "    f.write('%d,%.6f,%s,%.6f,%.4f,%.4f,%.4f\\n'%(\n"
-    "        O.iter,O.time,phase,eps,sig1/1e3,sig3/1e3,ratio))\n"
+    "        O.iter,O.time,phase,eps,sig1/1e3,-sig3/1e3,ratio))\n"
     "lastEps = float(O.tags['lastStrain'])\n"
     "if eps-lastEps >= 0.001:\n"
     "    O.tags['lastStrain'] = str(eps)\n"
@@ -405,14 +410,16 @@ progressCmd = (
     "botZ   = O.bodies[botId].state.pos[2] + rp\n"
     "L      = topZ - botZ\n"
     "eps    = max((L0-L)/L0, 0.0) if L0>0 else 0.0\n"
-    "fTop   = sum(abs(i.phys.normalForce[2]) for i in O.interactions\n"
+    "fTop   = sum((i.phys.normalForce[2] if i.id1==topId else -i.phys.normalForce[2])\n"
+    "             for i in O.interactions\n"
     "             if i.isReal and hasattr(i,'phys') and i.phys is not None\n"
     "             and (i.id1==topId or i.id2==topId))\n"
-    "fBot   = sum(abs(i.phys.normalForce[2]) for i in O.interactions\n"
+    "fBot   = sum((i.phys.normalForce[2] if i.id1==botId else -i.phys.normalForce[2])\n"
+    "             for i in O.interactions\n"
     "             if i.isReal and hasattr(i,'phys') and i.phys is not None\n"
     "             and (i.id1==botId or i.id2==botId))\n"
-    "sig1   = 0.5*(fTop+fBot)/A if A>0 else 0.0\n"
-    "ratio  = sig1/sig3 if sig3>0 else 0.0\n"
+    "sig1   = 0.5*(fTop-fBot)/A if A>0 else 0.0\n"
+    "ratio  = sig1/(-sig3) if sig3>0 else 0.0\n"
     "nC     = sum(1 for i in O.interactions if i.isReal)\n"
     "uMean  = sum(b.state.vel.norm() for b in O.bodies\n"
     "             if isinstance(b.shape,Sphere))/max(len(O.bodies),1)\n"
@@ -420,7 +427,7 @@ progressCmd = (
     "print('PROGRESS [%s] iter=%d t=%.4fs eps=%.5f '\n"
     "      'sig1=%.2fkPa sig3=%.2fkPa ratio=%.4f contacts=%d meanVel=%.3e'%(\n"
     "    phase.upper(),O.iter,O.time,eps,\n"
-    "    sig1/1e3,sig3/1e3,ratio,nC,uMean))\n"
+    "    sig1/1e3,-sig3/1e3,ratio,nC,uMean))\n"
     "sys.stdout.flush()\n"
 )
 
@@ -431,7 +438,6 @@ vtkCmd = (
     "try:\n"
     "    vtkS.exportSpheres(what={'vel':'b.state.vel.norm()'})\n"
     "    vtkI.exportInteractions(what={'fn':'i.phys.normalForce.norm()'})\n"
-    "    vtkW.exportSpheres()\n"
     "    import sys; print('VTK iter=%d'%O.iter); sys.stdout.flush()\n"
     "except Exception as e:\n"
     "    print('VTK error:',e)\n"
